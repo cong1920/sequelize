@@ -38,16 +38,16 @@ if (dialect === 'mysql') {
       const User = sequelize.define('User', { username: DataTypes.STRING });
 
       return User
-      .sync({force: true})
-      .then(() => User.create({username: 'user1'}))
-      .then(() => sequelize.Promise.delay(100))
-      .then(() => {
+        .sync({force: true})
+        .then(() => User.create({username: 'user1'}))
+        .then(() => sequelize.Promise.delay(100))
+        .then(() => {
         // This query will be queued just after the `client.end` is executed and before its callback is called
-        return sequelize.query('SELECT COUNT(*) AS count FROM Users', { type: sequelize.QueryTypes.SELECT });
-      })
-      .then(count => {
-        expect(count[0].count).to.equal(1);
-      });
+          return sequelize.query('SELECT COUNT(*) AS count FROM Users', { type: sequelize.QueryTypes.SELECT });
+        })
+        .then(count => {
+          expect(count[0].count).to.equal(1);
+        });
     });
 
     it('should maintain connection', () => {
@@ -76,7 +76,7 @@ if (dialect === 'mysql') {
         });
     });
 
-    it('should work with handleDisconnects', () => {
+    it('should work with handleDisconnects before release', () => {
       const sequelize = Support.createSequelizeInstance({pool: {min: 1, max: 1, handleDisconnects: true, idle: 5000}});
       const cm = sequelize.connectionManager;
       let conn;
@@ -87,8 +87,8 @@ if (dialect === 'mysql') {
         .then(connection => {
           // Save current connection
           conn = connection;
-          // simulate a unexpected end
-          connection.close();
+          // simulate a unexpected end from MySQL2
+          conn.stream.emit('end');
         })
         .then(() => cm.releaseConnection(conn))
         .then(() => {
@@ -116,6 +116,34 @@ if (dialect === 'mysql') {
         }))
         // https://github.com/sequelize/sequelize/issues/7184
         .spread(affectedCount => affectedCount.should.equal(1));
+    });
+
+    it('should work with handleDisconnects', () => {
+      const sequelize = Support.createSequelizeInstance({pool: {min: 1, max: 1, handleDisconnects: true, idle: 5000}});
+      const cm = sequelize.connectionManager;
+      let conn;
+
+      return sequelize
+        .sync()
+        .then(() => cm.getConnection())
+        .then(connection => {
+          // Save current connection
+          conn = connection;
+          return cm.releaseConnection(conn);
+        })
+        .then(() => {
+          // simulate a unexpected end from MySQL2 AFTER releasing the connection
+          conn.stream.emit('end');
+
+          // Get next available connection
+          return cm.getConnection();
+        })
+        .then(connection => {
+          // Old threadId should be different from current new one
+          expect(conn.threadId).to.not.be.equal(connection.threadId);
+          expect(cm.validate(conn)).to.not.be.ok;
+          return cm.releaseConnection(connection);
+        });
     });
   });
 }
